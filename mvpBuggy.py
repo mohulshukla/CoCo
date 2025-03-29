@@ -3,7 +3,13 @@ import mediapipe as mp
 import numpy as np
 import os
 import time
+import base64
 from datetime import datetime
+from io import BytesIO
+import threading
+from google import genai
+from google.genai import types
+from PIL import Image
 
 # Initialize MediaPipe Hand solution
 mp_hands = mp.solutions.hands
@@ -26,6 +32,132 @@ eraser_thickness = 20  # Eraser is thicker than the pen
 save_dir = "saved_drawings"
 os.makedirs(save_dir, exist_ok=True)
 
+# Create directory for Gemini enhanced images
+enhanced_dir = "enhanced_drawings"
+os.makedirs(enhanced_dir, exist_ok=True)
+
+# Gemini API settings
+GEMINI_API_KEY = "AIzaSyAUwKWagFjsciy0etZjxTyUoxk4dighn5M"  # Using the provided API key
+GEMINI_MODEL = "gemini-2.0-flash-exp-image-generation"  # Using the specified image generation model
+
+# Initialize enhanced image placeholder
+enhanced_image = None
+is_processing = False
+
+# Initialize Gemini client
+gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+
+# Function to enhance drawing with Gemini
+def enhance_drawing_with_gemini(drawing, prompt=""):
+    global enhanced_image, is_processing
+    
+    if not GEMINI_API_KEY:
+        print("Error: Gemini API key is not set. Cannot enhance drawing.")
+        error_img = np.zeros((drawing.shape[0], drawing.shape[1], 3), dtype=np.uint8)
+        cv2.putText(error_img, "API KEY NOT SET", (error_img.shape[1]//4, error_img.shape[0]//2), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+        enhanced_image = error_img
+        is_processing = False
+        return
+    
+    try:
+        # Create a thread to handle the Gemini API call
+        def process_with_gemini(drawing_img, prompt_text):
+            global enhanced_image, is_processing
+            try:
+                # Default prompt if none provided
+                if not prompt_text:
+                    prompt_text = "Enhance this sketch into a detailed image."
+                
+                # Convert OpenCV image to PIL Image
+                pil_img = Image.fromarray(cv2.cvtColor(drawing_img, cv2.COLOR_BGR2RGB))
+                
+                # Convert the image to bytes and then to base64
+                buffered = BytesIO()
+                pil_img.save(buffered, format="JPEG")
+                img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
+                
+                # Prepare the prompt and image data
+                contents = [
+                    {"text": prompt_text},
+                    {"inlineData": {
+                        "mimeType": "image/jpeg",
+                        "data": img_str
+                    }}
+                ]
+                
+                # Set the model and configuration
+                config = types.GenerateContentConfig(response_modalities=['Text', 'Image'])
+                
+                # Generate the enhanced image
+                response = gemini_client.models.generate_content(
+                    model=GEMINI_MODEL,
+                    contents=contents,
+                    config=config
+                )
+                
+                print("RESPONSE: ", response)
+                
+                # Process the response
+                for part in response.candidates[0].content.parts:
+                    if part.text is not None:
+                        print("Text response:", part.text)
+                    elif part.inline_data is not None:
+                        # Save the generated image
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        enhanced_path = f"{enhanced_dir}/enhanced_{timestamp}.png"
+                        
+                        # Convert to PIL image
+                        resp_image = Image.open(BytesIO((part.inline_data.data)))
+                        resp_image.save(enhanced_path)
+                        
+                        # Convert PIL Image to OpenCV format
+                        img_array = np.array(resp_image)
+                        # Convert RGB to BGR (OpenCV format)
+                        if len(img_array.shape) == 3 and img_array.shape[2] == 3:
+                            img = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+                        else:
+                            img = img_array
+                        
+                        print(f"Enhanced image saved to {enhanced_path}")
+                        
+                        # Update the global enhanced image
+                        enhanced_image = img
+                        return
+                
+                # If no image was found in the response
+                print("No image found in Gemini response")
+                error_img = np.zeros((drawing.shape[0], drawing.shape[1], 3), dtype=np.uint8)
+                cv2.putText(error_img, "No image in response", (error_img.shape[1]//4, error_img.shape[0]//2), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                enhanced_image = error_img
+            
+            except Exception as e:
+                print(f"Error enhancing drawing with Gemini: {str(e)}")
+                error_img = np.zeros((drawing.shape[0], drawing.shape[1], 3), dtype=np.uint8)
+                cv2.putText(error_img, f"ERROR: {str(e)[:30]}...", (10, error_img.shape[0]//2), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                enhanced_image = error_img
+            
+            finally:
+                is_processing = False
+        
+        # Start the processing thread
+        is_processing = True
+        
+        # Create a "Processing..." image while waiting
+        processing_img = np.zeros((drawing.shape[0], drawing.shape[1], 3), dtype=np.uint8)
+        cv2.putText(processing_img, "Processing with Gemini...", (processing_img.shape[1]//4, processing_img.shape[0]//2), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        enhanced_image = processing_img
+        
+        # Start processing in background
+        threading.Thread(target=process_with_gemini, args=(drawing, prompt)).start()
+        
+    except Exception as e:
+        print(f"Error preparing drawing for Gemini: {str(e)}")
+        is_processing = False
+
 # Start webcam
 cap = cv2.VideoCapture(1)  # Using camera index 1 as specified
 if not cap.isOpened():
@@ -35,11 +167,15 @@ if not cap.isOpened():
 # Get initial frame to set canvas size
 success, frame = cap.read()
 if not success:
-    print("Can't receive frame")
+    print("Can't receive frame from camera")
     exit()
     
 h, w, _ = frame.shape
 canvas = np.zeros((h, w, 3), dtype=np.uint8)
+
+# Create a window for the combined view (original + enhanced)
+cv2.namedWindow('Hand Drawing', cv2.WINDOW_NORMAL)
+cv2.resizeWindow('Hand Drawing', w*2, h)  # Double width to show both images side by side
 
 # Status text variables
 mode_text = "Drawing Mode"
@@ -158,11 +294,31 @@ while True:
     help_y = h - 30
     cv2.putText(combined_img, "Index finger: Draw | Fist: Erase | Middle finger: Clear All", 
                 (10, help_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-    cv2.putText(combined_img, "Keyboard: r,g,b,y,p=Colors | +/- = thickness | s=Save | q=Quit", 
+    cv2.putText(combined_img, "Keyboard: r,g,b,y,p=Colors | G=Gemini enhance | s=Save | q=Quit", 
                 (10, help_y + 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
     
+    # Create a combined image to display (original + enhanced)
+    display_img = combined_img.copy()
+    
+    # If we have an enhanced image, add it to the right side
+    if enhanced_image is not None:
+        # Resize enhanced image to match the canvas height
+        enhanced_resized = cv2.resize(enhanced_image, (w, h))
+        
+        # Create a side-by-side display image
+        display_img = np.zeros((h, w*2, 3), dtype=np.uint8)
+        display_img[:, :w] = combined_img
+        display_img[:, w:] = enhanced_resized
+        
+        # Add a dividing line
+        cv2.line(display_img, (w, 0), (w, h), (255, 255, 255), 2)
+        
+        # Add an "Enhanced" label on the right side
+        cv2.putText(display_img, "Enhanced Drawing", (w + 10, 30), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+    
     # Display the resulting frame
-    cv2.imshow('Hand Drawing', combined_img)
+    cv2.imshow('Hand Drawing', display_img)
     
     # Controls
     key = cv2.waitKey(1) & 0xFF
@@ -180,16 +336,20 @@ while True:
         
         # Provide feedback on the screen
         print(f"Drawing saved to {filename}")
-        feedback_text = f"Saved to {filename}"
         
         # Show feedback on screen
-        cv2.putText(combined_img, "Drawing Saved!", (w//2 - 100, h//2), 
+        feedback_img = combined_img.copy()
+        cv2.putText(feedback_img, "Drawing Saved!", (w//2 - 100, h//2), 
                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        cv2.imshow('Hand Drawing', combined_img)
+        cv2.imshow('Hand Drawing', feedback_img)
         cv2.waitKey(1000)  # Show message for 1 second
         
         # Clear the canvas for a new drawing
         canvas = np.zeros((h, w, 3), dtype=np.uint8)
+    elif key == ord('G'):  # capital G to enhance with Gemini
+        if not is_processing:
+            print("Enhancing drawing with Gemini...")
+            enhance_drawing_with_gemini(canvas, "Enhance this sketch into a beautiful, colorful detailed image.")
     elif key == ord('r'):  # r for red
         drawing_color = (0, 0, 255)
         color_text = "Red"
