@@ -1,2 +1,5 @@
 .next/
 node_modules/
+saved_drawings/
+enhanced_drawings/
+gemini-native-image.png
