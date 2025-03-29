@@ -11,6 +11,8 @@ from google import genai
 from google.genai import types
 from PIL import Image
 
+from dotenv import load_dotenv
+
 # Initialize MediaPipe Hand solution
 mp_hands = mp.solutions.hands
 mp_drawing = mp.solutions.drawing_utils
@@ -37,7 +39,8 @@ enhanced_dir = "enhanced_drawings"
 os.makedirs(enhanced_dir, exist_ok=True)
 
 # Gemini API settings
-GEMINI_API_KEY = "AIzaSyAUwKWagFjsciy0etZjxTyUoxk4dighn5M"  # Using the provided API key
+load_dotenv()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")  # Load from environment variable if set
 GEMINI_MODEL = "gemini-2.0-flash-exp-image-generation"  # Using the specified image generation model
 
 # Initialize enhanced image placeholder

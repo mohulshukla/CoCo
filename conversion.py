@@ -3,6 +3,12 @@ import base64
 from io import BytesIO
 from google import genai
 from google.genai import types
+import os
+from dotenv import load_dotenv
+
+# Gemini API settings
+load_dotenv()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")  # Load from environment variable if set
 
 # Load the image
 image_path = "/Users/mohulshukla/Desktop/coco/saved_drawings/drawing_20250329_005231.png"
@@ -14,7 +20,7 @@ image.save(buffered, format="JPEG")
 img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
 # Set up the client with your API key
-client = genai.Client(api_key='AIzaSyAUwKWagFjsciy0etZjxTyUoxk4dighn5M')
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 # Prepare the prompt and image data
 prompt = "Enhance this sketch into a detailed image."
