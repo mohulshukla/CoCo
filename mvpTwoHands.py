@@ -32,7 +32,7 @@ drawing_colors = {
     1: (0, 255, 0)   # Green color for second hand
 }
 drawing_thickness = 5
-eraser_thickness = 20  # Eraser is thicker than the pen
+eraser_thickness = 50  # Eraser is thicker than the pen
 
 # Create output directory for saved images
 save_dir = "saved_drawings"
