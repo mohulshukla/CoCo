@@ -264,13 +264,15 @@ def check_for_auto_enhancement(current_canvas):
             last_enhanced_canvas = current_canvas.copy()
             
             # Trigger enhancement
-            enhance_drawing_with_gemini(current_canvas, "Turn this sketch into a polished, colorful illustration with creative details.")
+            vibe_prompt = "Convert this rough sketch into an image of a low-poly 3D model. Include all the objects in the image, with nothing else."
+            colorful_prompt = "Turn this sketch into a polished, colorful illustration with creative details."
+            enhance_drawing_with_gemini(current_canvas, vibe_prompt)
             return True
     
     return False
 
 # Start webcam
-cap = cv2.VideoCapture(1)  # Using camera index is subject to change
+cap = cv2.VideoCapture(0)  # Using camera index is subject to change
 if not cap.isOpened():
     print("Cannot open camera")
     exit()
@@ -403,8 +405,6 @@ while True:
                 canvas = np.zeros((h, w, 3), dtype=np.uint8)
                 prev_point = None
                 
-                # Update canvas hash after clearing
-                last_canvas_hash = calculate_image_hash(canvas)
                 
             else:
                 # Any other hand position - stop drawing/erasing
@@ -473,7 +473,6 @@ while True:
         break
     elif key == ord('c'):  # c to clear canvas
         canvas = np.zeros((h, w, 3), dtype=np.uint8)
-        last_canvas_hash = calculate_image_hash(canvas)
     elif key == ord('s'):  # s to save the current drawing
         # Generate filename with timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
