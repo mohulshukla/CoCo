@@ -10,6 +10,7 @@ import threading
 from google import genai
 from google.genai import types
 from PIL import Image
+import hashlib
 
 from dotenv import load_dotenv
 
@@ -47,8 +48,62 @@ GEMINI_MODEL = "gemini-2.0-flash-exp-image-generation"  # Using the specified im
 enhanced_image = None
 is_processing = False
 
+# Auto-enhancement variables
+last_drawing_time = time.time()
+debounce_delay = 3.0  # Wait for 3 seconds of no drawing before enhancing
+auto_enhance_enabled = True
+last_enhancement_time = 0
+min_enhancement_interval = 10.0  # Minimum seconds between enhancements
+last_enhanced_canvas = None  # Store the canvas that was last enhanced
+enhancement_threshold = 0.98  # Similarity threshold to trigger new enhancement
+
 # Initialize Gemini client
 client = genai.Client(api_key=GEMINI_API_KEY)
+
+# Function to calculate image similarity using embeddings/histograms
+def calculate_image_similarity(img1, img2):
+    if img1 is None or img2 is None:
+        return 0.0
+        
+    # Convert to grayscale
+    if len(img1.shape) == 3:
+        img1_gray = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+    else:
+        img1_gray = img1
+        
+    if len(img2.shape) == 3:
+        img2_gray = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+    else:
+        img2_gray = img2
+    
+    # Resize both images to same dimensions for comparison
+    img1_resized = cv2.resize(img1_gray, (64, 64))
+    img2_resized = cv2.resize(img2_gray, (64, 64))
+    
+    # Apply blur to reduce noise
+    img1_blurred = cv2.GaussianBlur(img1_resized, (5, 5), 0)
+    img2_blurred = cv2.GaussianBlur(img2_resized, (5, 5), 0)
+    
+    # Calculate histograms
+    hist1 = cv2.calcHist([img1_blurred], [0], None, [64], [0, 256])
+    hist2 = cv2.calcHist([img2_blurred], [0], None, [64], [0, 256])
+    
+    # Normalize histograms
+    cv2.normalize(hist1, hist1, 0, 1, cv2.NORM_MINMAX)
+    cv2.normalize(hist2, hist2, 0, 1, cv2.NORM_MINMAX)
+    
+    # Compare histograms (higher value means more similar)
+    similarity = cv2.compareHist(hist1, hist2, cv2.HISTCMP_CORREL)
+    
+    # Also calculate structural similarity for additional measure
+    try:
+        ssim = cv2.matchTemplate(img1_blurred, img2_blurred, cv2.TM_CCOEFF_NORMED)[0][0]
+        # Combine the two measures (weighted average)
+        combined_similarity = (similarity * 0.6) + (max(0, ssim) * 0.4)
+        return combined_similarity
+    except:
+        # If template matching fails, just return histogram similarity
+        return similarity
 
 # Function to enhance drawing with Gemini
 def enhance_drawing_with_gemini(drawing, prompt=""):
@@ -79,7 +134,7 @@ def enhance_drawing_with_gemini(drawing, prompt=""):
             try:
                 # Default prompt if none provided
                 if not prompt_text:
-                    prompt_text = "Enhance this sketch into a detailed image."
+                    prompt_text = "Enhance this sketch into an image with more detail."
                 
                 # Prepare the prompt and image data
                 contents = [
@@ -122,7 +177,8 @@ def enhance_drawing_with_gemini(drawing, prompt=""):
                         print(f"Enhanced image saved to {enhanced_path}")
                         
                         # Update the global enhanced image
-                        enhanced_image = img
+                        enhanced_image = img.copy()  # Ensure we make a copy
+                        print("Enhanced image successfully set to display")
                         break
                 
                 # If no image was found in the response
@@ -159,8 +215,62 @@ def enhance_drawing_with_gemini(drawing, prompt=""):
         print(f"Error preparing drawing for Gemini: {str(e)}")
         is_processing = False
 
+# Function to check for debounced drawing activity and trigger enhancement
+def check_for_auto_enhancement(current_canvas):
+    global last_drawing_time, is_processing, auto_enhance_enabled
+    global last_enhancement_time, last_enhanced_canvas
+    
+    current_time = time.time()
+    
+    # Don't even check if processing is already happening
+    if is_processing:
+        return False
+        
+    # Don't check if auto-enhance is disabled
+    if not auto_enhance_enabled:
+        return False
+        
+    # Enforce minimum interval between enhancement requests
+    if (current_time - last_enhancement_time) < min_enhancement_interval:
+        return False
+    
+    # If enough time has passed since last drawing activity and canvas has content
+    if (auto_enhance_enabled and 
+        not is_processing and 
+        (current_time - last_drawing_time) > debounce_delay):
+        
+        # Check if the canvas has meaningful content (not just a blank canvas)
+        # Convert to grayscale and count non-zero pixels
+        gray_canvas = cv2.cvtColor(current_canvas, cv2.COLOR_BGR2GRAY)
+        non_zero = cv2.countNonZero(gray_canvas)
+        
+        # If canvas has meaningful content, check if it's different from last enhanced canvas
+        if non_zero > 1000:  # Threshold for minimum drawing size
+            
+            # Compare with last enhanced canvas
+            if last_enhanced_canvas is not None:
+                similarity = calculate_image_similarity(current_canvas, last_enhanced_canvas)
+                print(f"Canvas similarity with last enhanced: {similarity:.4f}")
+                
+                # If canvas is very similar to the last enhanced one, don't enhance again
+                if similarity > enhancement_threshold:
+                    return False
+            
+            # If we reach here, the canvas has changed enough to warrant a new enhancement
+            print(f"Auto-enhancing drawing... (Time since last enhancement: {current_time - last_enhancement_time:.1f}s)")
+            last_enhancement_time = current_time
+            
+            # Store current canvas as the one being enhanced
+            last_enhanced_canvas = current_canvas.copy()
+            
+            # Trigger enhancement
+            enhance_drawing_with_gemini(current_canvas, "Turn this sketch into a polished, colorful illustration with creative details.")
+            return True
+    
+    return False
+
 # Start webcam
-cap = cv2.VideoCapture(1)  # Using camera index 1 as specified
+cap = cv2.VideoCapture(1)  # Using camera index is subject to change
 if not cap.isOpened():
     print("Cannot open camera")
     exit()
@@ -181,6 +291,11 @@ cv2.resizeWindow('Hand Drawing', w*2, h)  # Double width to show both images sid
 # Status text variables
 mode_text = "Drawing Mode"
 color_text = "Red"
+auto_enhance_status = "AUTO-ENHANCE: ON"
+
+# Initialize variables
+last_enhancement_time = time.time()
+last_enhanced_canvas = None
 
 while True:
     # Read frame from webcam
@@ -203,6 +318,7 @@ while True:
     
     # Initialize hand mode
     hand_mode = "None"
+    was_drawing = False
     
     if results.multi_hand_landmarks:
         for hand_landmarks in results.multi_hand_landmarks:
@@ -241,6 +357,10 @@ while True:
             if fingers_extended[1] and not fingers_extended[2] and not fingers_extended[3] and not fingers_extended[4]:
                 hand_mode = "Drawing"
                 mode_text = "Drawing Mode"
+                was_drawing = True
+                
+                # Update last drawing time for debouncing
+                last_drawing_time = time.time()
                 
                 # Draw circle at index finger tip position
                 cv2.circle(combined_img, current_point, 10, drawing_color, -1)
@@ -255,6 +375,10 @@ while True:
             elif not any(fingers_extended):
                 hand_mode = "Erasing"
                 mode_text = "Eraser Mode"
+                was_drawing = True
+                
+                # Update last drawing time for debouncing
+                last_drawing_time = time.time()
                 
                 # Draw eraser circle
                 cv2.circle(combined_img, current_point, eraser_thickness, (255, 255, 255), -1)
@@ -270,10 +394,17 @@ while True:
             elif not fingers_extended[0] and not fingers_extended[1] and fingers_extended[2] and not fingers_extended[3] and not fingers_extended[4]:
                 hand_mode = "Clear All"
                 mode_text = "Cleared Canvas"
+                was_drawing = True
+                
+                # Update last drawing time for debouncing
+                last_drawing_time = time.time()
                 
                 # Clear the entire canvas
                 canvas = np.zeros((h, w, 3), dtype=np.uint8)
                 prev_point = None
+                
+                # Update canvas hash after clearing
+                last_canvas_hash = calculate_image_hash(canvas)
                 
             else:
                 # Any other hand position - stop drawing/erasing
@@ -287,16 +418,31 @@ while True:
         hand_mode = "None"
         mode_text = "No Hand Detected"
     
+    # If we were not actively drawing/erasing, check if we should auto-enhance (only check periodically)
+    if not was_drawing and not is_processing and (int(time.time() * 5) % 5 == 0):
+        check_for_auto_enhancement(canvas.copy())
+    
     # Display status information on the frame
     cv2.putText(combined_img, mode_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
     cv2.putText(combined_img, f"Color: {color_text}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, drawing_color, 2)
+    cv2.putText(combined_img, auto_enhance_status, (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.7, 
+                (0, 255, 0) if auto_enhance_enabled else (0, 0, 255), 2)
+    
+    # Show similarity debug info if there's a previous enhanced canvas
+    if last_enhanced_canvas is not None and auto_enhance_enabled:
+        similarity = calculate_image_similarity(canvas, last_enhanced_canvas)
+        similarity_color = (0, 255, 0) if similarity < enhancement_threshold else (0, 0, 255)
+        cv2.putText(combined_img, f"Similarity: {similarity:.2f}", (10, 150), 
+                  cv2.FONT_HERSHEY_SIMPLEX, 0.7, similarity_color, 2)
     
     # Draw guidelines for gestures at the bottom of the screen
-    help_y = h - 30
+    help_y = h - 55
     cv2.putText(combined_img, "Index finger: Draw | Fist: Erase | Middle finger: Clear All", 
                 (10, help_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-    cv2.putText(combined_img, "Keyboard: r,g,b,y,p=Colors | G=Gemini enhance | s=Save | q=Quit", 
+    cv2.putText(combined_img, "Keyboard: r,g,b,y,p=Colors | G=Manual enhance | a=Toggle auto", 
                 (10, help_y + 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+    cv2.putText(combined_img, "t=Adjust sensitivity | s=Save | q=Quit", 
+                (10, help_y + 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
     
     # Create a combined image to display (original + enhanced)
     display_img = combined_img.copy()
@@ -327,6 +473,7 @@ while True:
         break
     elif key == ord('c'):  # c to clear canvas
         canvas = np.zeros((h, w, 3), dtype=np.uint8)
+        last_canvas_hash = calculate_image_hash(canvas)
     elif key == ord('s'):  # s to save the current drawing
         # Generate filename with timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -347,10 +494,26 @@ while True:
         
         # Clear the canvas for a new drawing
         canvas = np.zeros((h, w, 3), dtype=np.uint8)
-    elif key == ord('G'):  # capital G to enhance with Gemini
+        # Don't reset last_enhanced_canvas here - it should still be compared against
+    elif key == ord('G'):  # capital G to manually enhance with Gemini
         if not is_processing:
-            print("Enhancing drawing with Gemini...")
+            print("Manually enhancing drawing with Gemini...")
             enhance_drawing_with_gemini(canvas, "Turn this sketch into a polished, colorful illustration with creative details.")
+    elif key == ord('a'):  # a to toggle auto-enhancement
+        auto_enhance_enabled = not auto_enhance_enabled
+        auto_enhance_status = "AUTO-ENHANCE: ON" if auto_enhance_enabled else "AUTO-ENHANCE: OFF"
+        print(f"Auto-enhancement: {'enabled' if auto_enhance_enabled else 'disabled'}")
+    elif key == ord('t'):  # t to adjust enhancement threshold
+        # Toggle between three sensitivity levels
+        if enhancement_threshold > 0.95:
+            enhancement_threshold = 0.85  # More sensitive (enhances with smaller changes)
+            print("Enhancement sensitivity: HIGH (threshold: 0.85)")
+        elif enhancement_threshold > 0.80:
+            enhancement_threshold = 0.75  # Very sensitive
+            print("Enhancement sensitivity: VERY HIGH (threshold: 0.75)")
+        else:
+            enhancement_threshold = 0.98  # Less sensitive (requires bigger changes)
+            print("Enhancement sensitivity: LOW (threshold: 0.98)")
     elif key == ord('r'):  # r for red
         drawing_color = (0, 0, 255)
         color_text = "Red"

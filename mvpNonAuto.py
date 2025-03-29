@@ -48,7 +48,7 @@ enhanced_image = None
 is_processing = False
 
 # Initialize Gemini client
-gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 # Function to enhance drawing with Gemini
 def enhance_drawing_with_gemini(drawing, prompt=""):
@@ -64,21 +64,22 @@ def enhance_drawing_with_gemini(drawing, prompt=""):
         return
     
     try:
+        # Convert OpenCV image to PIL Image
+        drawing_rgb = cv2.cvtColor(drawing, cv2.COLOR_BGR2RGB)
+        pil_image = Image.fromarray(drawing_rgb)
+        
+        # Convert the image to bytes and then to base64
+        buffered = BytesIO()
+        pil_image.save(buffered, format="JPEG")
+        img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
+        
         # Create a thread to handle the Gemini API call
-        def process_with_gemini(drawing_img, prompt_text):
+        def process_with_gemini(prompt_text):
             global enhanced_image, is_processing
             try:
                 # Default prompt if none provided
                 if not prompt_text:
-                    prompt_text = "Enhance this sketch into a detailed image."
-                
-                # Convert OpenCV image to PIL Image
-                pil_img = Image.fromarray(cv2.cvtColor(drawing_img, cv2.COLOR_BGR2RGB))
-                
-                # Convert the image to bytes and then to base64
-                buffered = BytesIO()
-                pil_img.save(buffered, format="JPEG")
-                img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
+                    prompt_text = "Enhance this sketch into an image with more detail."
                 
                 # Prepare the prompt and image data
                 contents = [
@@ -89,11 +90,11 @@ def enhance_drawing_with_gemini(drawing, prompt=""):
                     }}
                 ]
                 
-                # Set the model and configuration
+                # Set the configuration
                 config = types.GenerateContentConfig(response_modalities=['Text', 'Image'])
                 
                 # Generate the enhanced image
-                response = gemini_client.models.generate_content(
+                response = client.models.generate_content(
                     model=GEMINI_MODEL,
                     contents=contents,
                     config=config
@@ -106,34 +107,31 @@ def enhance_drawing_with_gemini(drawing, prompt=""):
                     if part.text is not None:
                         print("Text response:", part.text)
                     elif part.inline_data is not None:
-                        # Save the generated image
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        enhanced_path = f"{enhanced_dir}/enhanced_{timestamp}.png"
-                        
-                        # Convert to PIL image
-                        resp_image = Image.open(BytesIO((part.inline_data.data)))
-                        resp_image.save(enhanced_path)
-                        
-                        # Convert PIL Image to OpenCV format
-                        img_array = np.array(resp_image)
-                        # Convert RGB to BGR (OpenCV format)
+                        # Convert the generated image to OpenCV format
+                        image = Image.open(BytesIO(part.inline_data.data))
+                        img_array = np.array(image)
                         if len(img_array.shape) == 3 and img_array.shape[2] == 3:
                             img = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
                         else:
                             img = img_array
                         
+                        # Save the enhanced image
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        enhanced_path = f"{enhanced_dir}/enhanced_{timestamp}.png"
+                        cv2.imwrite(enhanced_path, img)
                         print(f"Enhanced image saved to {enhanced_path}")
                         
                         # Update the global enhanced image
                         enhanced_image = img
-                        return
+                        break
                 
                 # If no image was found in the response
-                print("No image found in Gemini response")
-                error_img = np.zeros((drawing.shape[0], drawing.shape[1], 3), dtype=np.uint8)
-                cv2.putText(error_img, "No image in response", (error_img.shape[1]//4, error_img.shape[0]//2), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-                enhanced_image = error_img
+                if enhanced_image is None:
+                    print("No enhanced image found in Gemini response")
+                    error_img = np.zeros((drawing.shape[0], drawing.shape[1], 3), dtype=np.uint8)
+                    cv2.putText(error_img, "No image in response", (error_img.shape[1]//4, error_img.shape[0]//2), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                    enhanced_image = error_img
             
             except Exception as e:
                 print(f"Error enhancing drawing with Gemini: {str(e)}")
@@ -155,14 +153,14 @@ def enhance_drawing_with_gemini(drawing, prompt=""):
         enhanced_image = processing_img
         
         # Start processing in background
-        threading.Thread(target=process_with_gemini, args=(drawing, prompt)).start()
+        threading.Thread(target=process_with_gemini, args=(prompt,)).start()
         
     except Exception as e:
         print(f"Error preparing drawing for Gemini: {str(e)}")
         is_processing = False
 
 # Start webcam
-cap = cv2.VideoCapture(1)  # Using camera index 1 as specified
+cap = cv2.VideoCapture(1)  # Using camera index is subject to change
 if not cap.isOpened():
     print("Cannot open camera")
     exit()
@@ -352,7 +350,7 @@ while True:
     elif key == ord('G'):  # capital G to enhance with Gemini
         if not is_processing:
             print("Enhancing drawing with Gemini...")
-            enhance_drawing_with_gemini(canvas, "Enhance this sketch into a beautiful, colorful detailed image.")
+            enhance_drawing_with_gemini(canvas, "Turn this sketch into a polished, colorful illustration with creative details.")
     elif key == ord('r'):  # r for red
         drawing_color = (0, 0, 255)
         color_text = "Red"
