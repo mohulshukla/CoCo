@@ -51,7 +51,7 @@ class StoryVideoGenerator:
         else:
             raise ValueError("ELEVENLABS_API_KEY not set in environment variables")
     
-    def get_recent_images(self, limit=5):
+    def get_recent_images(self, limit=6):
         """Get the most recent images from the enhanced drawings directory."""
         if not os.path.exists(self.enhanced_dir):
             raise FileNotFoundError(f"Enhanced images directory '{self.enhanced_dir}' not found!")
@@ -64,7 +64,7 @@ class StoryVideoGenerator:
                         reverse=True)
         
         # Limit to 5 images
-        image_files = image_files[5:limit+5]
+        image_files = image_files[10:limit+10]
         return [os.path.join(self.enhanced_dir, f) for f in image_files]
     
     def analyze_images(self, image_paths):
@@ -83,11 +83,11 @@ class StoryVideoGenerator:
                 img = Image.open(path)
                 
                 # Create the prompt for image analysis
-                prompt = """Describe this image in a fun and colorful way. Include:
+                prompt = """Describe this image in a fun way. Include:
                 - What's happening in the scene
-                - The main colors and shapes
+                - The main shapes
                 - Any interesting details or characters
-                Keep it to 2-3 sentences and use simple, clear language."""
+                Keep it to 2-3 sentences and use very simple, clear language."""
                 
                 # Generate content using the correct model and API structure
                 response = self.client.models.generate_content(
@@ -121,7 +121,7 @@ class StoryVideoGenerator:
         }}
         
         Make each scene narration about 5-7 seconds long when read aloud.
-        Make the story exciting and full of color! Use simple words but make it fun and engaging.
+        Make the story exciting and full of color! Use simple words but make it fun and engaging. Make sure the overall story has some general theme. Pick that theme early on and try to stick to it.
         IMPORTANT: Your response must be valid JSON only, with no additional text or markdown formatting.
         """
         
@@ -164,11 +164,11 @@ class StoryVideoGenerator:
         try:
             logging.info("Starting audio generation...")
             start_time = time.time()
-            
+            voice_ids = ["JBFqnCBsd6RMkjVDRZzb", "7fbQ7yJuEo56rYjrYaEh"]
             # Use ElevenLabs for high-quality voice generation
             audio_generator = self.eleven_client.text_to_speech.convert(
                 text=text,
-                voice_id="JBFqnCBsd6RMkjVDRZzb",  # You can change this to any voice ID you prefer
+                voice_id="7fbQ7yJuEo56rYjrYaEh",  # You can change this to any voice ID you prefer
                 model_id="eleven_multilingual_v2",
                 output_format="mp3_44100_128"
             )
