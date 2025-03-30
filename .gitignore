@@ -40,7 +40,8 @@ enhanced_drawings/
 *.png
 *.jpg
 *.jpeg
-
+*.mp4
+*.mp3
 .next/
 node_modules/
 gemini-native-image.png

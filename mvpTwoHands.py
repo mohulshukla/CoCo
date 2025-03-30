@@ -158,7 +158,8 @@ def enhance_drawing_with_gemini(drawing, prompt=""):
                     config=config
                 )
                 
-                print("RESPONSE: ", response)
+                print("Query to Gemini sent and response received.")
+                # print("RESPONSE: ", response)
                 
                 # Process the response
                 for part in response.candidates[0].content.parts:
@@ -269,7 +270,7 @@ def check_for_auto_enhancement(current_canvas):
             # Trigger enhancement
             vibe_prompt = "Convert this rough sketch into an image of a low-poly 3D model. Include all the objects in the image, with nothing else."
             colorful_prompt = "Turn this sketch into a polished, colorful illustration with creative details."
-            enhance_drawing_with_gemini(current_canvas, vibe_prompt)
+            enhance_drawing_with_gemini(current_canvas, colorful_prompt)
             return True
     
     return False
