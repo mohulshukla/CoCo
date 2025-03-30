@@ -51,8 +51,13 @@ class StoryVideoGenerator:
         else:
             raise ValueError("ELEVENLABS_API_KEY not set in environment variables")
     
-    def get_recent_images(self, limit=6):
-        """Get the most recent images from the enhanced drawings directory."""
+    def get_recent_images(self, image_paths=None):
+        """Get images from the provided paths or from the enhanced drawings directory."""
+        if image_paths:
+            # If paths are provided, use those directly
+            return image_paths
+        
+        # Fallback to getting images from directory if no paths provided
         if not os.path.exists(self.enhanced_dir):
             raise FileNotFoundError(f"Enhanced images directory '{self.enhanced_dir}' not found!")
         
@@ -63,8 +68,6 @@ class StoryVideoGenerator:
         image_files.sort(key=lambda x: os.path.getctime(os.path.join(self.enhanced_dir, x)), 
                         reverse=True)
         
-        # Limit to 5 images
-        image_files = image_files[10:limit+10]
         return [os.path.join(self.enhanced_dir, f) for f in image_files]
     
     def analyze_images(self, image_paths):
@@ -262,13 +265,13 @@ class StoryVideoGenerator:
         eased_progress = progress * progress
         return cv2.addWeighted(frame1, 1 - eased_progress, frame2, eased_progress, 0)
     
-    def generate_video(self):
+    def generate_video(self, image_paths=None):
         """Generate the complete story video."""
         try:
-            # Get recent images
-            image_paths = self.get_recent_images()
+            # Get images from provided paths or directory
+            image_paths = self.get_recent_images(image_paths)
             if not image_paths:
-                raise ValueError("No images found in enhanced_drawings directory")
+                raise ValueError("No images found!")
             
             logging.info(f"Found {len(image_paths)} images")
             

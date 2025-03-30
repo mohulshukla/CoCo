@@ -11,7 +11,7 @@ from google import genai
 from google.genai import types
 from PIL import Image
 import hashlib
-from story_video_generator import StoryVideoGenerator
+
 from dotenv import load_dotenv
 
 # Initialize MediaPipe Hand solution
@@ -41,20 +41,6 @@ os.makedirs(save_dir, exist_ok=True)
 # Create directory for Gemini enhanced images
 enhanced_dir = "enhanced_drawings"
 os.makedirs(enhanced_dir, exist_ok=True)
-
-# Storyboard settings
-storyboard_width = 300  # Increased width for better visibility
-storyboard_images = []  # List to store storyboard images
-storyboard_spacing = 15  # Spacing between images
-storyboard_title_height = 40  # Height for the title area
-storyboard_footer_height = 30  # Height for the footer area
-thumbs_up_detection_time = 3.0  # Seconds required for thumbs up detection
-thumbs_up_start_time = None  # Track when thumbs up was first detected
-
-# Initialize video generator
-video_generator = StoryVideoGenerator(enhanced_dir=enhanced_dir)
-video_playing = False
-current_video = None
 
 # Gemini API settings
 load_dotenv()
@@ -320,203 +306,6 @@ def determine_hand_mode(landmarks):
         # Any other hand position
         return "None", fingers_extended
 
-# Function to detect thumbs up gesture
-def detect_thumbs_up(landmarks):
-    if not landmarks:
-        return False
-    
-    # Get relevant landmarks
-    thumb_tip = landmarks[4]
-    thumb_ip = landmarks[3]
-    index_tip = landmarks[8]
-    index_pip = landmarks[6]
-    middle_tip = landmarks[12]
-    middle_pip = landmarks[10]
-    ring_tip = landmarks[16]
-    ring_pip = landmarks[14]
-    pinky_tip = landmarks[20]
-    pinky_pip = landmarks[18]
-    
-    # Check if thumb is extended (y-coordinate of tip is above IP joint)
-    thumb_extended = thumb_tip[1] < thumb_ip[1]
-    
-    # Check if other fingers are closed (tips are below PIP joints)
-    fingers_closed = (
-        index_tip[1] > index_pip[1] and
-        middle_tip[1] > middle_pip[1] and
-        ring_tip[1] > ring_pip[1] and
-        pinky_tip[1] > pinky_pip[1]
-    )
-    
-    return thumb_extended and fingers_closed
-
-# Function to add image to storyboard
-def add_to_storyboard(image):
-    global storyboard_images
-    
-    # Use enhanced image if available, otherwise use original
-    image_to_save = enhanced_image if enhanced_image is not None else image
-    
-    # Resize image to fit storyboard width while maintaining aspect ratio
-    height, width = image_to_save.shape[:2]
-    aspect_ratio = height / width
-    new_width = storyboard_width - 2 * storyboard_spacing
-    new_height = int(new_width * aspect_ratio)
-    
-    resized = cv2.resize(image_to_save, (new_width, new_height))
-    
-    # Add to storyboard images list
-    storyboard_images.append(resized)
-    
-    # Save to enhanced_drawings directory for video generation
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"{enhanced_dir}/enhanced_{timestamp}.png"
-    cv2.imwrite(filename, image_to_save)
-
-# Function to draw storyboard
-def draw_storyboard(frame):
-    h, w = frame.shape[:2]
-    
-    # Create a black background for the storyboard
-    storyboard = np.zeros((h, storyboard_width, 3), dtype=np.uint8)
-    
-    # Draw title area with gradient background
-    title_bg = np.zeros((storyboard_title_height, storyboard_width, 3), dtype=np.uint8)
-    for i in range(storyboard_title_height):
-        alpha = i / storyboard_title_height
-        color = (int(40 * (1 - alpha)), int(40 * (1 - alpha)), int(40 * (1 - alpha)))
-        title_bg[i, :] = color
-    storyboard[:storyboard_title_height, :] = title_bg
-    
-    # Draw title text with shadow
-    title_text = "Storyboard"
-    font_scale = 0.8
-    thickness = 2
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    
-    # Calculate text size
-    (text_width, text_height), baseline = cv2.getTextSize(title_text, font, font_scale, thickness)
-    text_x = (storyboard_width - text_width) // 2
-    text_y = (storyboard_title_height + text_height) // 2
-    
-    # Draw shadow
-    cv2.putText(storyboard, title_text, (text_x + 1, text_y + 1), 
-                font, font_scale, (0, 0, 0), thickness)
-    # Draw main text
-    cv2.putText(storyboard, title_text, (text_x, text_y), 
-                font, font_scale, (255, 255, 255), thickness)
-    
-    # Calculate available space for images
-    available_height = h - storyboard_title_height - storyboard_footer_height
-    total_spacing = (len(storyboard_images) + 1) * storyboard_spacing
-    available_image_height = available_height - total_spacing
-    
-    # Calculate maximum height for each image
-    if len(storyboard_images) > 0:
-        max_image_height = available_image_height // len(storyboard_images)
-    else:
-        max_image_height = available_height
-    
-    # Draw images
-    y_offset = storyboard_title_height + storyboard_spacing
-    for i, img in enumerate(storyboard_images):
-        # Resize image to fit available space while maintaining aspect ratio
-        h_img, w_img = img.shape[:2]
-        aspect_ratio = h_img / w_img
-        new_width = storyboard_width - 2 * storyboard_spacing
-        new_height = min(int(new_width * aspect_ratio), max_image_height)
-        
-        # Resize image
-        resized = cv2.resize(img, (new_width, new_height))
-        
-        # Calculate y position
-        y_end = y_offset + new_height
-        
-        # Draw image with shadow effect
-        shadow_offset = 3
-        
-        # Draw shadow
-        shadow_rect = np.zeros((new_height + shadow_offset, new_width + shadow_offset, 3), dtype=np.uint8)
-        shadow_rect[shadow_offset:, shadow_offset:] = resized
-        storyboard[y_offset:y_end + shadow_offset, 
-                  storyboard_spacing:storyboard_spacing + new_width + shadow_offset] = shadow_rect
-        
-        # Draw main image
-        storyboard[y_offset:y_end, storyboard_spacing:storyboard_spacing + new_width] = resized
-        
-        # Draw image number
-        number_text = f"#{i + 1}"
-        (num_width, num_height), _ = cv2.getTextSize(number_text, font, 0.5, 1)
-        cv2.putText(storyboard, number_text, 
-                   (storyboard_spacing + 5, y_offset + 20),
-                   font, 0.5, (255, 255, 255), 1)
-        
-        y_offset += new_height + storyboard_spacing
-    
-    # Draw footer with gradient
-    footer_bg = np.zeros((storyboard_footer_height, storyboard_width, 3), dtype=np.uint8)
-    for i in range(storyboard_footer_height):
-        alpha = i / storyboard_footer_height
-        color = (int(40 * alpha), int(40 * alpha), int(40 * alpha))
-        footer_bg[i, :] = color
-    storyboard[h - storyboard_footer_height:, :] = footer_bg
-    
-    # Draw image count in footer
-    count_text = f"Total Images: {len(storyboard_images)}"
-    (count_width, count_height), _ = cv2.getTextSize(count_text, font, 0.6, 1)
-    count_x = (storyboard_width - count_width) // 2
-    count_y = h - 10
-    cv2.putText(storyboard, count_text, (count_x, count_y),
-                font, 0.6, (255, 255, 255), 1)
-    
-    return storyboard
-
-# Function to generate and play video
-def generate_and_play_video():
-    global video_playing, current_video
-    
-    if len(storyboard_images) < 2:
-        print("Need at least 2 images to generate a video")
-        return
-    
-    try:
-        # Get the paths of the images in the storyboard
-        image_paths = []
-        for i, img in enumerate(storyboard_images):
-            # Save the current storyboard image to a temporary file
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            temp_path = f"{enhanced_dir}/storyboard_{timestamp}_{i}.png"
-            cv2.imwrite(temp_path, img)
-            image_paths.append(temp_path)
-        
-        # Generate video using the storyboard images
-        video_path = video_generator.generate_video(image_paths)
-        if video_path:
-            print(f"Video generated successfully: {video_path}")
-            
-            # Play video using system default player
-            import platform
-            import subprocess
-            
-            system = platform.system()
-            if system == 'Darwin':  # macOS
-                subprocess.call(('open', video_path))
-            elif system == 'Windows':
-                os.startfile(video_path)
-            else:  # Linux
-                subprocess.call(('xdg-open', video_path))
-        else:
-            print("Failed to generate video")
-    except Exception as e:
-        print(f"Error generating/playing video: {e}")
-    finally:
-        # Clean up temporary files
-        for path in image_paths:
-            try:
-                os.remove(path)
-            except:
-                pass
-
 # Start webcam
 cap = cv2.VideoCapture(0)  # Using camera index is subject to change
 if not cap.isOpened():
@@ -598,22 +387,6 @@ while True:
             # Get current hand position (for drawing or erasing)
             current_point = tuple(landmarks[8])  # Using index finger tip for all modes
             
-            # Check for thumbs up gesture
-            if detect_thumbs_up(landmarks):
-                if thumbs_up_start_time is None:
-                    thumbs_up_start_time = time.time()
-                elif time.time() - thumbs_up_start_time >= thumbs_up_detection_time:
-                    # Save current canvas to storyboard
-                    if canvas is not None and not np.all(canvas == 0):  # Check if canvas is not empty
-                        add_to_storyboard(canvas.copy())
-                        # Clear canvas for new drawing
-                        canvas = np.zeros((h, w, 3), dtype=np.uint8)
-                        prev_points = {0: None, 1: None}
-                        print("Drawing saved to storyboard!")
-                    thumbs_up_start_time = None  # Reset the timer
-            else:
-                thumbs_up_start_time = None  # Reset the timer if gesture is lost
-            
             # DRAWING MODE
             if mode == "Drawing":
                 mode_text[hand_idx] = "Drawing Mode"
@@ -693,18 +466,16 @@ while True:
     
     # Draw guidelines for gestures at the bottom of the screen
     help_y = h - 75
-    cv2.putText(combined_img, "THUMBS UP: Save to Storyboard | v=Generate Video | c=Clear Storyboard", 
-                (10, help_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
     cv2.putText(combined_img, "INDEX FINGER: Draw | FIST: Erase | MIDDLE FINGER: Clear All", 
-                (10, help_y + 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+                (10, help_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
     cv2.putText(combined_img, "Keyboard for Hand 1: r,g,b,y,p=Colors", 
-                (10, help_y + 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+                (10, help_y + 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
     cv2.putText(combined_img, "Keyboard for Hand 2: 1,2,3,4,5=Colors", 
-                (10, help_y + 75), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+                (10, help_y + 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
     cv2.putText(combined_img, "G=Manual enhance | a=Toggle auto | s=Save | q=Quit", 
-                (10, help_y + 100), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+                (10, help_y + 75), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
     
-    # Create a combined image to display (original + enhanced + storyboard)
+    # Create a combined image to display (original + enhanced)
     display_img = combined_img.copy()
     
     # If we have an enhanced image, add it to the right side
@@ -713,30 +484,16 @@ while True:
         enhanced_resized = cv2.resize(enhanced_image, (w, h))
         
         # Create a side-by-side display image
-        display_img = np.zeros((h, w*2 + storyboard_width, 3), dtype=np.uint8)
+        display_img = np.zeros((h, w*2, 3), dtype=np.uint8)
         display_img[:, :w] = combined_img
-        display_img[:, w:w*2] = enhanced_resized
-        display_img[:, w*2:] = draw_storyboard(display_img)
+        display_img[:, w:] = enhanced_resized
         
-        # Add dividing lines
-        cv2.line(display_img, (w, 0), (w, h), (255, 255, 255), 2)
-        cv2.line(display_img, (w*2, 0), (w*2, h), (255, 255, 255), 2)
-        
-        # Add labels only at the top
-        cv2.putText(display_img, "Drawing | Enhanced | Storyboard", 
-                    (w//2 - 150, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-    else:
-        # If no enhanced image, just add storyboard
-        display_img = np.zeros((h, w + storyboard_width, 3), dtype=np.uint8)
-        display_img[:, :w] = combined_img
-        display_img[:, w:] = draw_storyboard(display_img)
-        
-        # Add dividing line
+        # Add a dividing line
         cv2.line(display_img, (w, 0), (w, h), (255, 255, 255), 2)
         
-        # Add label only at the top
-        cv2.putText(display_img, "Drawing | Storyboard", 
-                    (w//2 - 100, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        # Add an "Enhanced" label on the right side
+        cv2.putText(display_img, "Enhanced Drawing", (w + 10, 30), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
     
     # Display the resulting frame
     cv2.imshow('Hand Drawing', display_img)
@@ -827,11 +584,6 @@ while True:
         drawing_thickness = max(1, drawing_thickness - 1)
     elif key == ord('e'):  # e to toggle eraser size
         eraser_thickness = 40 if eraser_thickness == 20 else 20
-    elif key == ord('v'):  # v to generate and play video
-        generate_and_play_video()
-    elif key == ord('c'):  # c to clear storyboard
-        storyboard_images.clear()
-        print("Storyboard cleared!")
 
 # Release resources
 cap.release()
