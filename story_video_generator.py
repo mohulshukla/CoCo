@@ -64,7 +64,7 @@ class StoryVideoGenerator:
                         reverse=True)
         
         # Limit to 5 images
-        image_files = image_files[:limit]
+        image_files = image_files[5:limit+5]
         return [os.path.join(self.enhanced_dir, f) for f in image_files]
     
     def analyze_images(self, image_paths):
@@ -113,13 +113,14 @@ class StoryVideoGenerator:
         Your response must be a valid JSON object with exactly this structure:
         {{
             "title": "A fun and catchy title",
-            "story": "A 4-5 sentence story that connects the scenes. Make it exciting and colorful!",
-            "scene_descriptions": [
-                "A fun and colorful description of each scene",
+            "story": "A 2-3 sentence introduction to the story",
+            "scene_narrations": [
+                "A 2-3 sentence narration for each scene that describes what's happening and connects to the next scene",
                 ...
             ]
         }}
         
+        Make each scene narration about 5-7 seconds long when read aloud.
         Make the story exciting and full of color! Use simple words but make it fun and engaging.
         IMPORTANT: Your response must be valid JSON only, with no additional text or markdown formatting.
         """
@@ -155,7 +156,7 @@ class StoryVideoGenerator:
             return {
                 "title": "A Story of Imagination",
                 "story": "A tale unfolds through these magical scenes.",
-                "scene_descriptions": image_descriptions
+                "scene_narrations": ["A magical scene unfolds."] * len(image_descriptions)
             }
     
     def create_audio(self, text, output_path):
@@ -277,56 +278,84 @@ class StoryVideoGenerator:
             # Create timestamp for unique filenames
             timestamp = time.strftime("%Y%m%d_%H%M%S")
             
-            # Generate single audio file for the entire narration
-            logging.info("Generating audio narration...")
+            # Generate audio files for each scene
+            logging.info("Generating audio narrations...")
+            audio_paths = []
             
-            # Combine text into narration (without scene descriptions)
-            full_narration = f"{story_data['title']}. {story_data['story']}"
+            # Generate title audio
+            title_audio_path = os.path.join(self.temp_dir, f"title_{timestamp}.mp3")
+            self.create_audio(story_data["title"], title_audio_path)
+            audio_paths.append(title_audio_path)
             
-            # Generate audio file
-            audio_path = os.path.join(self.temp_dir, f"narration_{timestamp}.mp3")
-            self.create_audio(full_narration, audio_path)
+            # Generate story introduction audio
+            intro_audio_path = os.path.join(self.temp_dir, f"intro_{timestamp}.mp3")
+            self.create_audio(story_data["story"], intro_audio_path)
+            audio_paths.append(intro_audio_path)
+            
+            # Generate scene audio files
+            for i, narration in enumerate(story_data["scene_narrations"]):
+                scene_audio_path = os.path.join(self.temp_dir, f"scene_{i}_{timestamp}.mp3")
+                self.create_audio(narration, scene_audio_path)
+                audio_paths.append(scene_audio_path)
+            
+            # Load all audio clips and calculate durations
+            audio_clips = [mp.AudioFileClip(path) for path in audio_paths]
+            durations = [clip.duration for clip in audio_clips]
+            
+            # Calculate total duration and adjust scene durations
+            total_duration = sum(durations)
+            transition_duration = 1.0  # 1 second transitions
+            available_duration = total_duration - (len(durations) - 1) * transition_duration
             
             # Create video frames
             logging.info("Creating video frames...")
             all_frames = []
+            current_time = 0
             
-            # Add title screen with fade in
-            title_frames = self.create_scene_clip(image_paths[0], 3, 'ken_burns')
+            # Add title screen
+            title_frames = self.create_scene_clip(image_paths[0], durations[0], 'ken_burns')
             title_text = np.zeros((self.resolution[1], self.resolution[0], 3), dtype=np.uint8)
             cv2.putText(title_text, story_data["title"], 
                        (self.resolution[0]//4, self.resolution[1]//2),
                        cv2.FONT_HERSHEY_SIMPLEX, 2, (255, 255, 255), 3)
             all_frames.extend(title_frames)
+            current_time += durations[0]
+            
+            # Add introduction scene
+            intro_frames = self.create_scene_clip(image_paths[0], durations[1], 'ken_burns')
+            all_frames.extend(intro_frames)
+            current_time += durations[1]
             
             # Add scenes with transitions
             for i, img_path in enumerate(image_paths):
                 logging.info(f"Processing scene {i+1}/{len(image_paths)}")
+                scene_duration = durations[i + 2]  # +2 because we have title and intro
+                
                 # Create scene frames with alternating effects
-                scene_frames = self.create_scene_clip(img_path, self.scene_duration, 
+                scene_frames = self.create_scene_clip(img_path, scene_duration, 
                                                     'ken_burns' if i % 2 == 0 else 'pan')
                 
-                # Add transition if not the first scene
-                if i > 0:
-                    transition_frames = []
-                    for j in range(int(self.transition_duration * self.fps)):
-                        progress = j / (self.transition_duration * self.fps)
-                        transition_frame = self.create_transition(
-                            all_frames[-1], scene_frames[0], progress)
-                        transition_frames.append(transition_frame)
-                    all_frames.extend(transition_frames)
+                # Add transition
+                transition_frames = []
+                for j in range(int(transition_duration * self.fps)):
+                    progress = j / (transition_duration * self.fps)
+                    transition_frame = self.create_transition(
+                        all_frames[-1], scene_frames[0], progress)
+                    transition_frames.append(transition_frame)
+                all_frames.extend(transition_frames)
                 
                 all_frames.extend(scene_frames)
+                current_time += scene_duration + transition_duration
             
             # Create video clip
             logging.info("Creating final video...")
             video_clip = mp.ImageSequenceClip(all_frames, fps=self.fps)
             
-            # Load audio clip
-            audio_clip = mp.AudioFileClip(audio_path)
+            # Combine audio clips
+            final_audio = mp.concatenate_audioclips(audio_clips)
             
             # Set audio to video
-            final_video = video_clip.with_audio(audio_clip)
+            final_video = video_clip.with_audio(final_audio)
             
             # Write output file with better quality settings
             output_path = os.path.join(self.output_dir, f"story_{timestamp}.mp4")
@@ -344,7 +373,8 @@ class StoryVideoGenerator:
             
             # Clean up
             video_clip.close()
-            audio_clip.close()
+            for clip in audio_clips:
+                clip.close()
             
             logging.info(f"Video saved to: {output_path}")
             return output_path
