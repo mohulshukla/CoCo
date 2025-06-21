@@ -104,26 +104,6 @@ cd frontend-main
 npm run dev
 ```
 
-# TRELLIS on Modal
-
-This repository contains code to run Microsoft's TRELLIS 3D generation model on [Modal](https://modal.com).
-
-## Setup
-
-1. Install Modal CLI:
-```bash
-pip install modal
-```
-
-2. Authenticate with Modal:
-```bash
-modal token new
-```
-
-3. Deploy the application:
-```bash
-modal deploy trellis_modal.py
-```
 
 ## Usage
 
@@ -186,21 +166,7 @@ We provide a test client script that simplifies the API usage:
 python test_client.py --url https://your-username--trellis-generate.modal.run --image your_image.png --format glb
 ```
 
-## Parameters
 
-- `output_format`: Export format for the 3D model (`"glb"` or `"ply"`)
-- `seed`: Random seed for reproducibility
-- `ss_steps`: Number of steps for the sparse structure sampler (default: 12)
-- `ss_cfg_strength`: Classifier-free guidance strength for the sparse structure sampler (default: 7.5)
-- `slat_steps`: Number of steps for the SLat sampler (default: 12)
-- `slat_cfg_strength`: Classifier-free guidance strength for the SLat sampler (default: 3.0)
-
-## Notes
-
-- The first request may take longer as the model needs to be loaded into memory
-- The model requires an A100 GPU to run efficiently, which will be automatically provisioned by Modal
-- The generated 3D model is returned in the requested format (GLB or PLY) along with preview videos
-- All parameters are sent as form data (strings) rather than query parameters
 
 ## License
 
